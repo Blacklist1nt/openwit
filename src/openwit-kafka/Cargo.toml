@@ -49,7 +49,6 @@ tempfile = { workspace = true, features = ["default"] }
 # Internal dependencies
 openwit-config = { workspace = true }
 openwit_ingestion = { workspace = true }
-openwit-metrics = { workspace = true }
 openwit-proto = { workspace = true }
 openwit-control-plane = { workspace = true }
 

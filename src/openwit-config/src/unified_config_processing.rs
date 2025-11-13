@@ -157,9 +157,11 @@ impl UnifiedConfig {
                 result.log();
             }
 
-            let lsm_results = processing.lsm_engine.validate();
-            for result in lsm_results {
-                result.log();
+            if let Some(ref lsm_engine) = processing.lsm_engine {
+                let lsm_results = lsm_engine.validate();
+                for result in lsm_results {
+                    result.log();
+                }
             }
         }
         
@@ -194,8 +196,12 @@ impl UnifiedConfig {
         // Apply safe defaults to processing if present
         if let Some(ref mut processing) = self.processing {
             processing.buffer.apply_safe_defaults();
-            processing.lsm_engine.apply_safe_defaults();
-            processing.pipeline.apply_safe_defaults();
+            if let Some(ref mut lsm_engine) = processing.lsm_engine {
+                lsm_engine.apply_safe_defaults();
+            }
+            if let Some(ref mut pipeline) = processing.pipeline {
+                pipeline.apply_safe_defaults();
+            }
         }
         
         // Apply safe defaults to control plane

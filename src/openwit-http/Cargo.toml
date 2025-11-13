@@ -3,10 +3,6 @@ name = "openwit-http"
 version = "0.1.0"
 edition = "2021"
 
-[[bin]]
-name = "openwit-http"
-path = "src/bin/openwit-http.rs"
-
 [dependencies]
 # Web framework
 axum = { workspace = true }
@@ -37,7 +33,6 @@ opentelemetry-proto = { workspace = true }
 openwit_ingestion = { workspace = true }
 openwit-config = { workspace = true }
 openwit-proto = { workspace = true }
-openwit-metrics = { workspace = true }
 openwit-control-plane = { workspace = true }
 
 # Metrics

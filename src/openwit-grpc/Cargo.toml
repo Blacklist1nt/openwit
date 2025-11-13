@@ -14,6 +14,7 @@ path = "src/main.rs"
 tokio = { workspace = true }
 tonic = { workspace = true }
 anyhow = { workspace = true }
+thiserror = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -28,7 +29,6 @@ base64 = { workspace = true }
 opentelemetry-proto = { workspace = true }
 
 # Internal dependencies
-openwit-metrics = { workspace = true }
 openwit-config = { workspace = true }
 openwit_ingestion = { workspace = true }
 

@@ -20,6 +20,7 @@ openwit-storage = { workspace = true }
 openwit-indexer = { workspace = true }
 openwit_ingestion = { workspace = true }
 openwit-metastore = { workspace = true }
+# openwit-network = { workspace = true } # Network/gossip removed
 
 # Time handling
 chrono = { workspace = true }
@@ -43,6 +44,7 @@ clap = { workspace = true }
 [dev-dependencies]
 tempfile = "3.8"
 
-[[bin]]
-name = "openwit-janitor"
-path = "src/bin/openwit-janitor.rs"
+# Binary removed - janitor is a library crate used by openwit-cli
+# [[bin]]
+# name = "openwit-janitor"
+# path = "src/bin/openwit-janitor.rs"

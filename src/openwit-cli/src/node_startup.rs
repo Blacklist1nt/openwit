@@ -11,25 +11,6 @@ use parquet::file::properties::WriterProperties;
 use std::collections::HashMap;
 use chrono::Datelike;
 
-pub async fn start_proxy_node(config: UnifiedConfig, node_id: String, port: u16) -> Result<()> {
-    info!("Starting Proxy Node: {}", node_id);
-    info!("════════════════════════════════════════");
-    info!("Service port: {}", port);
-
-    let mut proxy_config = config;
-    proxy_config.ingestion.http.port = port;
-    proxy_config.ingestion.http.bind = format!("0.0.0.0:{}", port);
-    
-    // Using control plane for service discovery
-    
-    // Control plane discovery will be handled automatically
-    
-    // Start proxy node
-    openwit_proxy::start_proxy_node(node_id, proxy_config).await?;
-    
-    Ok(())
-}
-
 /// Start the control plane node with unified config
 pub async fn start_control_node(config: UnifiedConfig, node_id: String, port: u16) -> Result<()> {
     info!("Starting Control Plane Node");
@@ -42,17 +23,13 @@ pub async fn start_control_node(config: UnifiedConfig, node_id: String, port: u1
     info!("Node ID: {}", node_id);
     info!("Binding to: {}", addr);
 
-    // Initialize cluster networking
-    let cluster_handle = init_cluster_networking(&config).await?;
-
-    // Start control plane with optional config path
+    // Start control plane
     openwit_control_plane::start_control_plane(
         node_id,
-        cluster_handle,
         addr,
-        None, // Config is already loaded
+        None,
     ).await?;
-    
+
     Ok(())
 }
 
@@ -145,10 +122,24 @@ pub async fn start_grpc_node(config: UnifiedConfig, node_id: String, port: u16) 
     // Start OTLP gRPC server (uses openwit-grpc crate for standard OTLP protocol)
     info!("Starting OTLP/gRPC server on {}", addr);
 
-    // Use the OTLP gRPC server from openwit-grpc crate
-    let grpc_server = openwit_grpc::GrpcServer::new(ingest_config, None);
+    // Create ingestion channel for batching
+    let (ingest_tx, mut ingest_rx) = tokio::sync::mpsc::channel::<openwit_ingestion::IngestedMessage>(10000);
+
+    // Spawn task to receive batched messages from gRPC server
+    tokio::spawn(async move {
+        info!("Ingestion receiver started - waiting for batched messages from gRPC");
+        while let Some(message) = ingest_rx.recv().await {
+            // TODO: Forward to storage/indexing pipeline
+            // For now, just log that we received it
+            debug!("Received batched message: id={}, size={} bytes", message.id, message.size_bytes);
+        }
+        info!("Ingestion receiver shutting down");
+    });
+
+    // Use the OTLP gRPC server from openwit-grpc crate with ingestion channel
+    let grpc_server = openwit_grpc::GrpcServer::new(ingest_config, Some(ingest_tx));
     grpc_server.start().await?;
-    
+
     Ok(())
 }
 
@@ -156,15 +147,12 @@ pub async fn start_grpc_node(config: UnifiedConfig, node_id: String, port: u16) 
 pub async fn start_storage_node(config: UnifiedConfig, node_id: String, port: u16) -> Result<()> {
     info!("Starting Storage Node: {}", node_id);
     info!("════════════════════════════════════════");
-    
-    // Gossip functionality deprecated
-    let gossip_port = 0;
-    
+
     // Get Arrow Flight port from config
     let arrow_flight_port = config.service_ports.storage.arrow_flight;
-    
+
     // Create a temporary TOML config file for storage node
-    let _storage_config_toml = create_storage_config_toml(&config, &node_id, arrow_flight_port, gossip_port)?;
+    let _storage_config_toml = create_storage_config_toml(&config, &node_id, arrow_flight_port)?;
     
     info!("Storage configuration:");
     info!("  Backend: {}", config.storage.backend);
@@ -188,13 +176,14 @@ pub async fn start_storage_node(config: UnifiedConfig, node_id: String, port: u1
     
     // Gossip functionality deprecated - simplified storage setup
     let storage_config = config;
-    
-    // Create a minimal cluster handle for storage processor
-    let cluster_handle = init_cluster_networking_with_node_id(&storage_config, "storage", &node_id).await?;
-    
+
+    // Create a minimal cluster handle for storage processor (DISABLED - network removed)
+    // let cluster_handle = init_cluster_networking_with_node_id(&storage_config, "storage", &node_id).await?;
+
     // Start the Arrow Flight storage server with ParquetFileManager (NEW IMPLEMENTATION)
     info!("Starting Arrow Flight storage server with cloud upload support on port {}", arrow_flight_port);
-    start_arrow_flight_storage_server(storage_config.clone(), node_id.clone(), arrow_flight_port, cluster_handle).await?;
+    // Note: Cluster handle removed - gossip networking deprecated
+    start_arrow_flight_storage_server(storage_config.clone(), node_id.clone(), arrow_flight_port).await?;
     
     // Start gRPC query service on port 8083
     // Start simple gRPC query service on port 8083
@@ -213,7 +202,6 @@ pub async fn start_storage_node(config: UnifiedConfig, node_id: String, port: u1
     info!("  - Service on port {}", port);
     info!("  - Arrow Flight server on port {} (FULL MODE)", arrow_flight_port);
     info!("  - Simple gRPC query service on port {}", grpc_query_port);
-    info!("  - Gossip on port {}", gossip_port);
     info!("  - Reporting health to control plane");
     info!("  - Ready to receive batches from ingestion nodes");
     info!("  - Ready to handle queries via gRPC");
@@ -625,8 +613,8 @@ pub async fn start_indexer_node(config: UnifiedConfig, node_id: String, port: u1
     
     // Gossip functionality deprecated - simplified indexer setup
     let indexer_config = config;
-    let _cluster_handle: Option<openwit_network::ClusterHandle> = None;
-    
+    // let _cluster_handle: Option<openwit_network::ClusterHandle> = None; // Network removed
+
     // Start indexer service
     info!("Indexer configuration:");
     info!("  - Node ID: {}", node_id);
@@ -665,8 +653,8 @@ pub async fn start_search_node(config: UnifiedConfig, node_id: String, port: u16
     
     // Gossip functionality deprecated - simplified search setup
     let search_config = config;
-    let _cluster_handle: Option<openwit_network::ClusterHandle> = None;
-    
+    // let _cluster_handle: Option<openwit_network::ClusterHandle> = None; // Network removed
+
     // Start the search service
     info!("Search configuration:");
     info!("  HTTP port: {}", service_port);
@@ -695,8 +683,8 @@ pub async fn start_janitor_node(config: UnifiedConfig, node_id: String, port: u1
     
     // Gossip functionality deprecated - simplified janitor setup
     let janitor_config = config;
-    let _cluster_handle: Option<openwit_network::ClusterHandle> = None;
-    
+    // let _cluster_handle: Option<openwit_network::ClusterHandle> = None; // Network removed
+
     // TODO: Create janitor when janitor module is fully implemented
     info!("Janitor configuration:");
     info!("  Run interval: {}s", janitor_config.janitor.intervals.run_interval_seconds);
@@ -755,50 +743,50 @@ pub async fn start_kafka_node(config: UnifiedConfig, node_id: String) -> Result<
     Ok(())
 }
 
-/// Initialize cluster networking from config (gossip deprecated)
-async fn init_cluster_networking(_config: &UnifiedConfig) -> Result<openwit_network::ClusterHandle> {
-    init_cluster_networking_with_role(_config, "control").await
-}
+// REMOVED: Network/gossip functionality deprecated
+// /// Initialize cluster networking from config (gossip deprecated)
+// async fn init_cluster_networking(_config: &UnifiedConfig) -> Result<openwit_network::ClusterHandle> {
+//     init_cluster_networking_with_role(_config, "control").await
+// }
 
-/// Initialize cluster networking from config with specific role (gossip deprecated)
-async fn init_cluster_networking_with_role(_config: &UnifiedConfig, role: &str) -> Result<openwit_network::ClusterHandle> {
-    // Create a minimal cluster runtime for heartbeats only
-    debug!("Initializing cluster networking for role: {}", role);
+// /// Initialize cluster networking from config with specific role (gossip deprecated)
+// async fn init_cluster_networking_with_role(_config: &UnifiedConfig, role: &str) -> Result<openwit_network::ClusterHandle> {
+//     // Create a minimal cluster runtime for heartbeats only
+//     debug!("Initializing cluster networking for role: {}", role);
 
-    // Create a minimal cluster runtime without gossip
-    let node_name = format!("{}-{}", role, uuid::Uuid::new_v4().to_string().split('-').next().unwrap());
-    let gossip_addr: SocketAddr = "127.0.0.1:7946".parse()?;
-    let seed_nodes: Vec<SocketAddr> = Vec::new();
-    
-    let runtime = openwit_network::ClusterRuntime::start(
-        &node_name,
-        gossip_addr,
-        seed_nodes,
-        role,
-    ).await?;
-    
-    Ok(runtime.handle())
-}
+//     // Create a minimal cluster runtime without gossip
+//     let node_name = format!("{}-{}", role, uuid::Uuid::new_v4().to_string().split('-').next().unwrap());
+//     let gossip_addr: SocketAddr = "127.0.0.1:7946".parse()?;
+//     let seed_nodes: Vec<SocketAddr> = Vec::new();
+//
+//     let runtime = openwit_network::ClusterRuntime::start(
+//         &node_name,
+//         gossip_addr,
+//         seed_nodes,
+//         role,
+//     ).await?;
+//
+//     Ok(runtime.handle())
+// }
 
 /// Create storage node TOML config from unified config
 fn create_storage_config_toml(
     config: &UnifiedConfig,
     node_id: &str,
     flight_port: u16,
-    gossip_port: u16,
 ) -> Result<PathBuf> {
     use std::env;
-    
+
     let temp_dir = env::temp_dir();
     let config_path = temp_dir.join(format!("storage-{}.toml", node_id));
-    
+
     // Determine storage backend URL
     let artifact_uri = match config.storage.backend.as_str() {
         "s3" => format!("s3://{}", config.storage.s3.bucket),
         "azure" => format!("azblob://{}/{}", config.storage.azure.account_name, config.storage.azure.container_name),
         _ => format!("fs://{}", config.storage.local.path),
     };
-    
+
     // Create postgres DSN - for local testing, we'll use a placeholder
     // In production, this should be properly configured
     let postgres_dsn = std::env::var("DATABASE_URL")
@@ -807,7 +795,7 @@ fn create_storage_config_toml(
             // This will fail but allows us to see other initialization issues
             "postgres://localhost:5432/openwit_placeholder".to_string()
         });
-    
+
     let toml_content = format!(r#"
 [general]
 node_id = "{}"
@@ -816,11 +804,6 @@ work_dir = "{}/storage/{}"
 
 [postgres]
 dsn = "{}"
-
-[cluster]
-gossip_bind = "0.0.0.0:{}"
-health_push_interval_ms = 3000
-control_request_timeout_ms = 1500
 
 [flight]
 bind_addr = "0.0.0.0:{}"
@@ -859,19 +842,11 @@ enabled = true
 compaction_interval_ms = 300000
 min_compaction_size_mb = 100
 max_compaction_size_mb = 1000
-
-[gossip]
-enabled = true
-bind_addr = "0.0.0.0:{}"
-advertise_address = "{}"
-seed_nodes = {:?}
-interval_ms = 5000
 "#,
         node_id,
         config.storage.local.path,
         node_id,
         postgres_dsn,
-        gossip_port,
         flight_port,
         // Determine external endpoint for Arrow Flight
         if let Some(storage_endpoint) = &config.networking.service_endpoints.storage {
@@ -887,9 +862,6 @@ interval_ms = 5000
             format!("grpc://{}:{}", config.networking.get_service_advertise_address("storage"), flight_port)
         },
         artifact_uri,
-        gossip_port,
-        config.networking.get_service_advertise_address("storage"),
-        Vec::<String>::new(), // Empty seed nodes since gossip is deprecated
     );
     
     let mut file = std::fs::File::create(&config_path)
@@ -900,32 +872,33 @@ interval_ms = 5000
     Ok(config_path)
 }
 
-/// Initialize cluster networking with a specific node ID (gossip deprecated)
-async fn init_cluster_networking_with_node_id(_config: &UnifiedConfig, role: &str, node_id: &str) -> Result<openwit_network::ClusterHandle> {
-    info!("Cluster networking disabled (gossip deprecated)");
-    info!("  Node name: {}", node_id);
-    info!("  Role: {}", role);
-    
-    // Create a minimal cluster runtime without gossip
-    let gossip_addr: SocketAddr = "127.0.0.1:7946".parse()?;
-    let seed_nodes: Vec<SocketAddr> = Vec::new();
-    
-    let runtime = openwit_network::ClusterRuntime::start(
-        node_id,
-        gossip_addr,
-        seed_nodes,
-        role,
-    ).await?;
-    
-    Ok(runtime.handle())
-}
+// REMOVED: Network/gossip functionality deprecated
+// /// Initialize cluster networking with a specific node ID (gossip deprecated)
+// async fn init_cluster_networking_with_node_id(_config: &UnifiedConfig, role: &str, node_id: &str) -> Result<openwit_network::ClusterHandle> {
+//     info!("Cluster networking disabled (gossip deprecated)");
+//     info!("  Node name: {}", node_id);
+//     info!("  Role: {}", role);
+//
+//     // Create a minimal cluster runtime without gossip
+//     let gossip_addr: SocketAddr = "127.0.0.1:7946".parse()?;
+//     let seed_nodes: Vec<SocketAddr> = Vec::new();
+//
+//     let runtime = openwit_network::ClusterRuntime::start(
+//         node_id,
+//         gossip_addr,
+//         seed_nodes,
+//         role,
+//     ).await?;
+//
+//     Ok(runtime.handle())
+// }
 
 /// Start the real Arrow Flight storage server
 async fn start_arrow_flight_storage_server(
     config: UnifiedConfig,
     node_id: String,
     port: u16,
-    cluster_handle: openwit_network::ClusterHandle,
+    // cluster_handle parameter removed - gossip/network deprecated
 ) -> Result<()> {
     use arrow_flight::flight_service_server::FlightServiceServer;
     use tonic::transport::Server;
@@ -954,7 +927,7 @@ async fn start_arrow_flight_storage_server(
     let (storage_service, storage_processor) = match StorageFlightService::new(
         node_id.clone(),
         config.clone(),
-        cluster_handle.clone(),
+        // cluster_handle removed - gossip/network deprecated
     ).await {
         Ok(result) => {
             info!("Successfully created StorageFlightService");
@@ -1019,9 +992,9 @@ async fn start_arrow_flight_storage_server(
         }
     }
     
-    // Start health reporting
-    start_storage_health_reporter(&config, node_id, port, cluster_handle);
-    
+    // Start health reporting (without cluster_handle - gossip deprecated)
+    start_storage_health_reporter(&config, node_id, port);
+
     Ok(())
 }
 
@@ -1030,7 +1003,7 @@ fn start_storage_health_reporter(
     config: &UnifiedConfig,
     node_id: String,
     flight_port: u16,
-    _cluster_handle: openwit_network::ClusterHandle,
+    // _cluster_handle parameter removed - gossip/network deprecated
 ) {
     let config_clone = config.clone();
     
@@ -1201,11 +1174,11 @@ async fn register_grpc_node_with_control_plane(
     // Register with control plane (role is "ingest", service_type is "grpc")
     match client.register_node(node_id, "ingest", metadata).await {
         Ok(_) => {
-            info!("✅ Successfully registered gRPC node {} with control plane", node_id);
+            info!("Successfully registered gRPC node {} with control plane", node_id);
             info!("   gRPC endpoint: {}", ingestion_endpoint);
         }
         Err(e) => {
-            warn!("⚠️ Failed to register gRPC node {} with control plane: {}", node_id, e);
+            warn!("Failed to register gRPC node {} with control plane: {}", node_id, e);
         }
     }
 }
@@ -1268,7 +1241,7 @@ impl StorageFlightService {
     async fn new(
         node_id: String,
         config: UnifiedConfig,
-        _cluster_handle: openwit_network::ClusterHandle,
+        // _cluster_handle parameter removed - gossip/network deprecated
     ) -> Result<(Self, StorageProcessor)> {
         // Extract necessary config for simplified StorageProcessor
         let data_dir = config.storage.local.path.clone();

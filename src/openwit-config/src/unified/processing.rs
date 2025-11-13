@@ -5,10 +5,13 @@ use tracing::info;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProcessingConfig {
     pub buffer: BufferConfig,
-    pub lsm_engine: LsmEngineConfig,
-    pub system_metrics: SystemMetricsConfig,
+    #[serde(default)]
+    pub lsm_engine: Option<LsmEngineConfig>,
+    #[serde(default)]
+    pub system_metrics: Option<SystemMetricsConfig>,
     // WAL removed - no longer needed
-    pub pipeline: PipelineConfig,
+    #[serde(default)]
+    pub pipeline: Option<PipelineConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

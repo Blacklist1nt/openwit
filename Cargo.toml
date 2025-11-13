@@ -1,19 +1,13 @@
 [workspace]
 resolver = "2"
 members = [
-    "src/openwit-proxy",
-    # "src/openwit-perf-test",  # Temporarily disabled - rdkafka dependency issue
     "src/openwit-inter-node",
     "src/openwit_ingestion",
     "src/openwit-storage",
     "src/openwit-control-plane",
     "src/openwit-cli",
-    "src/openwit-network",
-    "src/openwit-metrics",
     "src/openwit-metastore",
     "src/openwit-search",
-    "src/openwit-transformations",
-    "src/openwit-server",
     "src/openwit-janitor",
     "src/openwit-proto",
     "src/openwit-config",
@@ -210,18 +204,13 @@ pretty_assertions = "1.4"
 tokio-test = "0.4"
 raft = "0.7"
 
-openwit-proxy = { path = "src/openwit-proxy" }
 openwit-inter-node = { path = "src/openwit-inter-node" }
 openwit_ingestion = { path = "src/openwit_ingestion" }
 openwit-storage = { path = "src/openwit-storage" }
 openwit-control-plane = { path = "src/openwit-control-plane" }
 openwit-cli = { path = "src/openwit-cli" }
-openwit-network = { path = "src/openwit-network" }
-openwit-metrics = { path = "src/openwit-metrics" }
 openwit-metastore = { path = "src/openwit-metastore" }
 openwit-search = { path = "src/openwit-search" }
-openwit-transformations = { path = "src/openwit-transformations" }
-openwit-server = { path = "src/openwit-server" }
 openwit-janitor = { path = "src/openwit-janitor" }
 openwit-proto = { path = "src/openwit-proto" }
 openwit-actors = { path = "src/openwit-actors" }

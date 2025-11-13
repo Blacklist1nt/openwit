@@ -5,7 +5,7 @@ edition.workspace = true
 
 [dependencies]
 tokio = { workspace = true }
-# rdkafka = { workspace = true } # Only openwit-proxy should consume from Kafka
+# rdkafka = { workspace = true } # Not needed in ingestion - Kafka consumption is handled by openwit-kafka crate
 prost = { workspace = true }
 opentelemetry-proto = { workspace = true }
 tracing = { workspace = true }
@@ -30,10 +30,9 @@ parking_lot = { workspace = true }
 sysinfo = { workspace = true }
 
 openwit-config = { workspace = true }
-openwit-metrics = { workspace = true }
 openwit-control-plane = { workspace = true }
 openwit-inter-node = { workspace = true }
-openwit-network = { workspace = true }
+# openwit-network = { workspace = true } # Network/gossip removed
 openwit-proto = { workspace = true }
 openwit-storage = { workspace = true }
 futures = { workspace = true }

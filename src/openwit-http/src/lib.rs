@@ -1,6 +1,6 @@
 pub mod otlp_handlers;
 pub mod server;
-pub mod metrics;
+// pub mod metrics;
 pub mod error;
 pub mod control_plane_integration;
 pub mod ingestion_client;

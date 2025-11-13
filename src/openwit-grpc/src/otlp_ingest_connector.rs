@@ -344,3 +344,396 @@ fn extract_number_value(value: &Option<otlp_metrics::number_data_point::Value>) 
         None => json!(null),
     }
 }
+
+// ========== Batcher-compatible versions ==========
+
+use crate::batcher::Batcher;
+use std::sync::Arc;
+
+/// Convert OTLP logs to batched messages
+pub async fn process_otlp_logs_batched(
+    logs: ExportLogsServiceRequest,
+    batcher: &Arc<Batcher>,
+) -> Result<usize, Box<dyn std::error::Error>> {
+    let mut count = 0;
+    let total_logs = logs.resource_logs.iter()
+        .flat_map(|rl| &rl.scope_logs)
+        .flat_map(|sl| &sl.log_records)
+        .count();
+
+    info!("OTLP LOGS BATCHED: Processing {} log records", total_logs);
+
+    for resource_logs in logs.resource_logs {
+        let resource_attrs = extract_resource_attributes(&resource_logs.resource);
+
+        for scope_logs in resource_logs.scope_logs {
+            let scope_name = scope_logs.scope.as_ref().map(|s| s.name.clone()).unwrap_or_default();
+
+            for log_record in scope_logs.log_records {
+                // Extract index_name from attributes if present
+                let mut index_name = None;
+                for attr in &log_record.attributes {
+                    if attr.key == "index_name" {
+                        match extract_any_value(&attr.value) {
+                            serde_json::Value::String(idx) => {
+                                index_name = Some(idx);
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                let mut payload = json!({
+                    "timestamp": format_timestamp(log_record.time_unix_nano),
+                    "observed_timestamp": format_timestamp(log_record.observed_time_unix_nano),
+                    "severity_text": log_record.severity_text,
+                    "severity_number": log_record.severity_number,
+                    "body": extract_any_value(&log_record.body),
+                    "scope": scope_name,
+                    "flags": log_record.flags,
+                });
+
+                // Add resource attributes
+                if let serde_json::Value::Object(ref mut map) = payload {
+                    map.insert("resource".to_string(), resource_attrs.clone());
+
+                    // Add log attributes
+                    let mut attrs = serde_json::Map::new();
+                    for attr in &log_record.attributes {
+                        attrs.insert(attr.key.clone(), extract_any_value(&attr.value));
+                    }
+                    map.insert("attributes".to_string(), serde_json::Value::Object(attrs));
+
+                    // Add trace context if present
+                    if !log_record.trace_id.is_empty() {
+                        map.insert("trace_id".to_string(), json!(hex::encode(&log_record.trace_id)));
+                    }
+                    if !log_record.span_id.is_empty() {
+                        map.insert("span_id".to_string(), json!(hex::encode(&log_record.span_id)));
+                    }
+                }
+
+                let payload_bytes = payload.to_string().into_bytes();
+                let message = IngestedMessage {
+                    id: format!("grpc:logs:{}:{}", Utc::now().timestamp_millis(), count),
+                    received_at: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as u64,
+                    size_bytes: payload_bytes.len(),
+                    source: MessageSource::Grpc { peer_addr: "unknown".to_string() },
+                    payload: MessagePayload::Logs(payload_bytes),
+                    index_name,
+                };
+
+                if let Err(e) = batcher.add_message(message).await {
+                    warn!("Failed to add log message to batch: {}", e);
+                } else {
+                    count += 1;
+                    if count == 1 || count % 100 == 0 {
+                        tracing::debug!("Added {} log messages to batch", count);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(count)
+}
+
+/// Convert OTLP traces to batched messages
+pub async fn process_otlp_traces_batched(
+    traces: ExportTraceServiceRequest,
+    batcher: &Arc<Batcher>,
+) -> Result<usize, Box<dyn std::error::Error>> {
+    let mut count = 0;
+
+    // Extract index_name from resource attributes if present
+    let mut index_name = None;
+    if let Some(first_resource) = traces.resource_spans.first() {
+        if let Some(resource) = &first_resource.resource {
+            for attr in &resource.attributes {
+                if attr.key == "index_name" {
+                    match extract_any_value(&attr.value) {
+                        serde_json::Value::String(idx) => {
+                            index_name = Some(idx);
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    // For now, we'll convert the entire request to a single message
+    let payload_bytes = traces.encode_to_vec();
+    let trace_id = traces.resource_spans.first()
+        .and_then(|rs| rs.scope_spans.first())
+        .and_then(|ss| ss.spans.first())
+        .map(|s| hex::encode(&s.trace_id))
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    let message = IngestedMessage {
+        id: format!("grpc:trace:{}", trace_id),
+        received_at: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64,
+        size_bytes: payload_bytes.len(),
+        source: MessageSource::Grpc { peer_addr: "unknown".to_string() },
+        payload: MessagePayload::Trace(payload_bytes),
+        index_name,
+    };
+
+    if let Err(e) = batcher.add_message(message).await {
+        warn!("Failed to add trace to batch: {}", e);
+    } else {
+        count = 1;
+    }
+
+    Ok(count)
+}
+
+/// Convert OTLP metrics to batched messages
+pub async fn process_otlp_metrics_batched(
+    metrics: ExportMetricsServiceRequest,
+    batcher: &Arc<Batcher>,
+) -> Result<usize, Box<dyn std::error::Error>> {
+    let mut count = 0;
+
+    // For now, convert each metric to a separate message as JSON
+    for resource_metrics in metrics.resource_metrics {
+        let resource_attrs = extract_resource_attributes(&resource_metrics.resource);
+
+        // Extract index_name from resource attributes if present
+        let mut index_name = None;
+        if let Some(resource) = &resource_metrics.resource {
+            for attr in &resource.attributes {
+                if attr.key == "index_name" {
+                    match extract_any_value(&attr.value) {
+                        serde_json::Value::String(idx) => {
+                            index_name = Some(idx.clone());
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        for scope_metrics in resource_metrics.scope_metrics {
+            let scope_name = scope_metrics.scope.as_ref().map(|s| s.name.clone()).unwrap_or_default();
+
+            for metric in scope_metrics.metrics {
+                let metric_name = metric.name.clone();
+
+                // Create a JSON representation of the metric
+                let payload = json!({
+                    "metric_name": metric_name,
+                    "unit": metric.unit,
+                    "description": metric.description,
+                    "scope": scope_name,
+                    "resource": resource_attrs,
+                    "data": serialize_metric_data(&metric.data),
+                });
+
+                let payload_bytes = payload.to_string().into_bytes();
+                let message = IngestedMessage {
+                    id: format!("grpc:metric:{}:{}:{}", metric_name, Utc::now().timestamp_millis(), count),
+                    received_at: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as u64,
+                    size_bytes: payload_bytes.len(),
+                    source: MessageSource::Grpc { peer_addr: "unknown".to_string() },
+                    payload: MessagePayload::Metrics(payload_bytes),
+                    index_name: index_name.clone(),
+                };
+
+                if let Err(e) = batcher.add_message(message).await {
+                    warn!("Failed to add metric to batch: {}", e);
+                } else {
+                    count += 1;
+                }
+            }
+        }
+    }
+
+    Ok(count)
+}
+//=============================================================================
+// Index ID Variants - Process OTLP data with explicit index_id parameter
+//=============================================================================
+
+use opentelemetry_proto::tonic::{
+    metrics::v1::ResourceMetrics,
+    logs::v1::ResourceLogs,
+};
+
+/// Convert OTLP traces to batched messages with explicit index_id
+pub async fn process_otlp_traces_batched_with_index(
+    traces: ExportTraceServiceRequest,
+    batcher: &Arc<Batcher>,
+    index_id: Option<String>,
+) -> Result<usize, Box<dyn std::error::Error>> {
+    let mut count = 0;
+
+    // For now, we'll convert the entire request to a single message
+    let payload_bytes = traces.encode_to_vec();
+    let trace_id = traces.resource_spans.first()
+        .and_then(|rs| rs.scope_spans.first())
+        .and_then(|ss| ss.spans.first())
+        .map(|s| hex::encode(&s.trace_id))
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    let message = IngestedMessage {
+        id: format!("grpc:trace:{}", trace_id),
+        received_at: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64,
+        size_bytes: payload_bytes.len(),
+        source: MessageSource::Grpc { peer_addr: "unknown".to_string() },
+        payload: MessagePayload::Trace(payload_bytes),
+        index_name: index_id, // Use provided index_id instead of extracting from attributes
+    };
+
+    if let Err(e) = batcher.add_message(message).await {
+        warn!("Failed to add trace to batch: {}", e);
+    } else {
+        count = 1;
+    }
+
+    Ok(count)
+}
+
+/// Convert OTLP metrics to batched messages with explicit index_id
+pub async fn process_otlp_metrics_batched_with_index(
+    metrics: ExportMetricsServiceRequest,
+    batcher: &Arc<Batcher>,
+    index_id: Option<String>,
+) -> Result<usize, Box<dyn std::error::Error>> {
+    let mut count = 0;
+
+    // For now, convert each metric to a separate message as JSON
+    for resource_metrics in metrics.resource_metrics {
+        let resource_attrs = extract_resource_attributes(&resource_metrics.resource);
+
+        for scope_metrics in resource_metrics.scope_metrics {
+            let scope_name = scope_metrics.scope.as_ref().map(|s| s.name.clone()).unwrap_or_default();
+
+            for metric in scope_metrics.metrics {
+                let metric_name = metric.name.clone();
+
+                // Create a JSON representation of the metric
+                let payload = json!({
+                    "metric_name": metric_name,
+                    "unit": metric.unit,
+                    "description": metric.description,
+                    "scope": scope_name,
+                    "resource": resource_attrs,
+                    "data": serialize_metric_data(&metric.data),
+                });
+
+                let payload_bytes = payload.to_string().into_bytes();
+                let message = IngestedMessage {
+                    id: format!("grpc:metric:{}:{}:{}", metric_name, Utc::now().timestamp_millis(), count),
+                    received_at: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as u64,
+                    size_bytes: payload_bytes.len(),
+                    source: MessageSource::Grpc { peer_addr: "unknown".to_string() },
+                    payload: MessagePayload::Metrics(payload_bytes),
+                    index_name: index_id.clone(), // Use provided index_id instead of extracting from attributes
+                };
+
+                if let Err(e) = batcher.add_message(message).await {
+                    warn!("Failed to add metric to batch: {}", e);
+                } else {
+                    count += 1;
+                }
+            }
+        }
+    }
+
+    Ok(count)
+}
+
+/// Convert OTLP logs to batched messages with explicit index_id
+pub async fn process_otlp_logs_batched_with_index(
+    logs: ExportLogsServiceRequest,
+    batcher: &Arc<Batcher>,
+    index_id: Option<String>,
+) -> Result<usize, Box<dyn std::error::Error>> {
+    let mut count = 0;
+    let total_logs = logs.resource_logs.iter()
+        .flat_map(|rl| &rl.scope_logs)
+        .flat_map(|sl| &sl.log_records)
+        .count();
+
+    info!("OTLP LOGS BATCHED: Processing {} log records with index_id", total_logs);
+
+    for resource_logs in logs.resource_logs {
+        let resource_attrs = extract_resource_attributes(&resource_logs.resource);
+
+        for scope_logs in resource_logs.scope_logs {
+            let scope_name = scope_logs.scope.as_ref().map(|s| s.name.clone()).unwrap_or_default();
+
+            for log_record in scope_logs.log_records {
+                let mut payload = json!({
+                    "timestamp": format_timestamp(log_record.time_unix_nano),
+                    "observed_timestamp": format_timestamp(log_record.observed_time_unix_nano),
+                    "severity_text": log_record.severity_text,
+                    "severity_number": log_record.severity_number,
+                    "body": extract_any_value(&log_record.body),
+                    "scope": scope_name,
+                    "flags": log_record.flags,
+                });
+
+                // Add resource attributes
+                if let serde_json::Value::Object(ref mut map) = payload {
+                    map.insert("resource".to_string(), resource_attrs.clone());
+
+                    // Add log attributes
+                    let mut attrs = serde_json::Map::new();
+                    for attr in &log_record.attributes {
+                        attrs.insert(attr.key.clone(), extract_any_value(&attr.value));
+                    }
+                    map.insert("attributes".to_string(), serde_json::Value::Object(attrs));
+
+                    // Add trace context if present
+                    if !log_record.trace_id.is_empty() {
+                        map.insert("trace_id".to_string(), json!(hex::encode(&log_record.trace_id)));
+                    }
+                    if !log_record.span_id.is_empty() {
+                        map.insert("span_id".to_string(), json!(hex::encode(&log_record.span_id)));
+                    }
+                }
+
+                let payload_bytes = payload.to_string().into_bytes();
+                let message = IngestedMessage {
+                    id: format!("grpc:logs:{}:{}", Utc::now().timestamp_millis(), count),
+                    received_at: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as u64,
+                    size_bytes: payload_bytes.len(),
+                    source: MessageSource::Grpc { peer_addr: "unknown".to_string() },
+                    payload: MessagePayload::Logs(payload_bytes),
+                    index_name: index_id.clone(), // Use provided index_id instead of extracting from attributes
+                };
+
+                if let Err(e) = batcher.add_message(message).await {
+                    warn!("Failed to add log message to batch: {}", e);
+                } else {
+                    count += 1;
+                }
+            }
+        }
+    }
+
+    Ok(count)
+}

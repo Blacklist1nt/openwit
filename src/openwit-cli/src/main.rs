@@ -70,13 +70,6 @@ enum NodeCommand {
         node_id: Option<String>,
     },
 
-    Proxy {
-        #[arg(long, default_value = "8080")]
-        port: u16,
-        #[arg(long)]
-        node_id: Option<String>,
-    },
-
     Grpc {
         #[arg(long)]
         port: Option<u16>,
@@ -211,14 +204,7 @@ async fn main() -> Result<()> {
     }
 
     // Apply ingestion type to configuration
-    // For proxy nodes, override to enable all ingestion types
-    let effective_ingestion_type = match &node_type {
-        NodeCommand::Proxy { .. } => {
-            info!("Proxy node detected, overriding ingestion type to 'all'");
-            IngestionType::All
-        }
-        _ => args.ingestion
-    };
+    let effective_ingestion_type = args.ingestion;
     
     info!("Applying ingestion type: {:?} - {}", effective_ingestion_type, effective_ingestion_type.description());
     effective_ingestion_type.apply_to_config(&mut config)?;
@@ -263,18 +249,18 @@ async fn main() -> Result<()> {
         }
     }
     
-    // Validate configuration based on ingestion type, but skip Kafka validation for non-proxy/monolith nodes
+    // Validate configuration based on ingestion type, but skip Kafka validation for non-Kafka nodes
     let skip_kafka_validation = matches!(node_type,
         NodeCommand::Control { .. } | NodeCommand::Grpc { .. } | NodeCommand::Http { .. } |
-        NodeCommand::Storage { .. } | NodeCommand::Indexer { .. } | 
+        NodeCommand::Storage { .. } | NodeCommand::Indexer { .. } |
         NodeCommand::Search { .. } | NodeCommand::Janitor { .. }
     );
     
     if skip_kafka_validation && matches!(args.ingestion, IngestionType::Kafka | IngestionType::All) {
-        // For non-proxy nodes using Kafka, we don't need broker configuration
+        // For non-Kafka nodes, we don't need broker configuration
         info!("Skipping Kafka broker validation for internal node communication");
     } else {
-        // Normal validation for proxy and monolith nodes
+        // Normal validation for Kafka nodes
         if let Err(e) = args.ingestion.validate_config(&config) {
             error!("Configuration validation failed for ingestion type {:?}", args.ingestion);
             error!("{}", e);
@@ -337,16 +323,6 @@ async fn main() -> Result<()> {
             info!("Starting Control Plane node: {} on port {}", node_id, control_port);
 
             node_startup::start_control_node(config, node_id, control_port).await?;
-        }
-        NodeCommand::Proxy { port: _, node_id } => {
-            let node_id = node_id.unwrap_or_else(|| generate_node_id("proxy"));
-
-            // Use configured port from config
-            let proxy_port = config.service_ports.proxy.service;
-
-            info!("Starting Proxy node: {} on port {}", node_id, proxy_port);
-
-            node_startup::start_proxy_node(config, node_id, proxy_port).await?;
         }
         NodeCommand::Grpc { port, node_id, grpc_bind } => {
             let node_id = node_id.unwrap_or_else(|| generate_node_id("grpc"));
@@ -449,13 +425,13 @@ async fn main() -> Result<()> {
                 Ok(server) => {
                     // Start control plane integration for health reporting
                     let bind_addr = server.bind_address().to_string();
-                    let control_plane_endpoint = config.control_plane.grpc_endpoint.clone();
-                    
+                    let config_arc = std::sync::Arc::new(config.clone());
+
                     // Create and start control plane integration
                     match ControlPlaneIntegration::new(
                         node_id.clone(),
                         bind_addr,
-                        &control_plane_endpoint
+                        config_arc
                     ).await {
                         Ok(integration) => {
                             let integration = std::sync::Arc::new(integration);

@@ -1,5 +1,6 @@
 use tokio::sync::mpsc;
 use tonic::{Request, Response, Status};
+use std::sync::Arc;
 
 use opentelemetry_proto::tonic::{
     collector::{
@@ -23,28 +24,29 @@ use opentelemetry_proto::tonic::{
 
 use opentelemetry_proto::tonic::metrics::v1::metric::Data;
 
-use openwit_metrics::{
-    EXPORT_LATENCY, INGEST_LOG_COUNTER, INGEST_METRIC_DP_COUNTER, INGEST_SPAN_COUNTER,
-};
+// use openwit_metrics::{
+//     EXPORT_LATENCY, INGEST_LOG_COUNTER, INGEST_METRIC_DP_COUNTER, INGEST_SPAN_COUNTER,
+// };
 
-// Import our formatting helpers
+// Import our formatting helpers and batcher
 use crate::format_helpers;
+use crate::batcher::Batcher;
 type TelemetryOutputSender = mpsc::Sender<String>;
 
 // --- Trace Service Implementation ---
-#[derive(Debug)]
+#[derive(Clone)]
 pub struct OtlpTraceService {
     output_tx: TelemetryOutputSender,
-    ingest_tx: Option<mpsc::Sender<openwit_ingestion::IngestedMessage>>,
+    batcher: Option<Arc<Batcher>>,
 }
 
 impl OtlpTraceService {
     pub fn new(output_tx: TelemetryOutputSender) -> Self {
-        Self { output_tx, ingest_tx: None }
+        Self { output_tx, batcher: None }
     }
-    
-    pub fn with_ingestion(mut self, ingest_tx: mpsc::Sender<openwit_ingestion::IngestedMessage>) -> Self {
-        self.ingest_tx = Some(ingest_tx);
+
+    pub fn with_batcher(mut self, batcher: Arc<Batcher>) -> Self {
+        self.batcher = Some(batcher);
         self
     }
 }
@@ -60,9 +62,19 @@ impl OtelTraceServiceTrait for OtlpTraceService {
             || "unknown".to_string(),
             |addr| addr.to_string(),
         );
-        tracing::info!(peer.addr = %remote_addr, "Received ExportTraceServiceRequest");
 
-        let _timer = EXPORT_LATENCY.with_label_values(&["logs"]).start_timer();
+        // Extract index_id from gRPC metadata (headers)
+        let index_id = request.metadata().get("index-id")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        if let Some(ref idx) = index_id {
+            tracing::info!(peer.addr = %remote_addr, index_id = %idx, "Received ExportTraceServiceRequest with index_id");
+        } else {
+            tracing::info!(peer.addr = %remote_addr, "Received ExportTraceServiceRequest");
+        }
+
+        // let _timer = EXPORT_LATENCY.with_label_values(&["logs"]).start_timer();
 
         // --- existing counting logic ......................
         let span_count = request
@@ -73,15 +85,25 @@ impl OtelTraceServiceTrait for OtlpTraceService {
             .flat_map(|ss| &ss.spans)
             .count();
 
-        INGEST_SPAN_COUNTER.inc_by(span_count as u64);
+        // INGEST_SPAN_COUNTER.inc_by(span_count as u64);
 
         let req_data = request.into_inner();
-        
-        // If we have an ingestion sender, process traces for storage
-        if let Some(ref ingest_tx) = self.ingest_tx {
-            match crate::otlp_ingest_connector::process_otlp_traces(req_data.clone(), ingest_tx).await {
-                Ok(count) => tracing::info!("Ingested {} trace batches", count),
-                Err(e) => tracing::error!("Failed to ingest traces: {}", e),
+
+        // If we have a batcher, add traces to batch for storage with index_id
+        if let Some(ref batcher) = self.batcher {
+            match crate::otlp_ingest_connector::process_otlp_traces_batched_with_index(
+                req_data.clone(),
+                batcher,
+                index_id.clone(),
+            ).await {
+                Ok(count) => {
+                    if let Some(ref idx) = index_id {
+                        tracing::info!(index_id = %idx, "Added {} traces to batch with index_id", count);
+                    } else {
+                        tracing::info!("Added {} traces to batch", count);
+                    }
+                },
+                Err(e) => tracing::error!("Failed to add traces to batch: {}", e),
             }
         }
         
@@ -161,19 +183,19 @@ impl OtelTraceServiceTrait for OtlpTraceService {
 // ... (imports and OtlpTraceService are above this) ...
 
 // --- Metrics Service Implementation ---
-#[derive(Debug)]
+#[derive(Clone)]
 pub struct OtlpMetricsService {
     output_tx: TelemetryOutputSender,
-    ingest_tx: Option<mpsc::Sender<openwit_ingestion::IngestedMessage>>,
+    batcher: Option<Arc<Batcher>>,
 }
 
 impl OtlpMetricsService {
     pub fn new(output_tx: TelemetryOutputSender) -> Self {
-        Self { output_tx, ingest_tx: None }
+        Self { output_tx, batcher: None }
     }
-    
-    pub fn with_ingestion(mut self, ingest_tx: mpsc::Sender<openwit_ingestion::IngestedMessage>) -> Self {
-        self.ingest_tx = Some(ingest_tx);
+
+    pub fn with_batcher(mut self, batcher: Arc<Batcher>) -> Self {
+        self.batcher = Some(batcher);
         self
     }
 }
@@ -188,7 +210,17 @@ impl OtelMetricsServiceTrait for OtlpMetricsService {
             || "unknown".to_string(),
             |addr| addr.to_string(),
         );
-        tracing::info!(peer.addr = %remote_addr, "Received ExportMetricsServiceRequest");
+
+        // Extract index_id from gRPC metadata (headers)
+        let index_id = request.metadata().get("index-id")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        if let Some(ref idx) = index_id {
+            tracing::info!(peer.addr = %remote_addr, index_id = %idx, "Received ExportMetricsServiceRequest with index_id");
+        } else {
+            tracing::info!(peer.addr = %remote_addr, "Received ExportMetricsServiceRequest");
+        }
 
         let metric_dp_count = request
             .get_ref()
@@ -204,15 +236,25 @@ impl OtelMetricsServiceTrait for OtlpMetricsService {
             })
             .sum::<usize>();
 
-        INGEST_METRIC_DP_COUNTER.inc_by(metric_dp_count as u64);
+        // INGEST_METRIC_DP_COUNTER.inc_by(metric_dp_count as u64);
 
         let req_data = request.into_inner();
-        
-        // If we have an ingestion sender, process metrics for storage
-        if let Some(ref ingest_tx) = self.ingest_tx {
-            match crate::otlp_ingest_connector::process_otlp_metrics(req_data.clone(), ingest_tx).await {
-                Ok(count) => tracing::info!("Ingested {} metrics", count),
-                Err(e) => tracing::error!("Failed to ingest metrics: {}", e),
+
+        // If we have a batcher, add metrics to batch for storage with index_id
+        if let Some(ref batcher) = self.batcher {
+            match crate::otlp_ingest_connector::process_otlp_metrics_batched_with_index(
+                req_data.clone(),
+                batcher,
+                index_id.clone(),
+            ).await {
+                Ok(count) => {
+                    if let Some(ref idx) = index_id {
+                        tracing::info!(index_id = %idx, "Added {} metrics to batch with index_id", count);
+                    } else {
+                        tracing::info!("Added {} metrics to batch", count);
+                    }
+                },
+                Err(e) => tracing::error!("Failed to add metrics to batch: {}", e),
             }
         }
         
@@ -333,19 +375,19 @@ impl OtelMetricsServiceTrait for OtlpMetricsService {
 // ... (OtlpLogsService should be below this) ...
 // ... (OtlpLogsService, OtlpTraceService) ...
 // --- Logs Service Implementation ---
-#[derive(Debug)]
+#[derive(Clone)]
 pub struct OtlpLogsService {
     output_tx: TelemetryOutputSender,
-    ingest_tx: Option<mpsc::Sender<openwit_ingestion::IngestedMessage>>,
+    batcher: Option<Arc<Batcher>>,
 }
 
 impl OtlpLogsService {
     pub fn new(output_tx: TelemetryOutputSender) -> Self {
-        Self { output_tx, ingest_tx: None }
+        Self { output_tx, batcher: None }
     }
-    
-    pub fn with_ingestion(mut self, ingest_tx: mpsc::Sender<openwit_ingestion::IngestedMessage>) -> Self {
-        self.ingest_tx = Some(ingest_tx);
+
+    pub fn with_batcher(mut self, batcher: Arc<Batcher>) -> Self {
+        self.batcher = Some(batcher);
         self
     }
 }
@@ -361,7 +403,17 @@ impl OtelLogsServiceTrait for OtlpLogsService {
             || "unknown".to_string(),
             |addr| addr.to_string(),
         );
-        tracing::info!(peer.addr = %remote_addr, "Received ExportLogsServiceRequest");
+
+        // Extract index_id from gRPC metadata (headers)
+        let index_id = request.metadata().get("index-id")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        if let Some(ref idx) = index_id {
+            tracing::info!(peer.addr = %remote_addr, index_id = %idx, "Received ExportLogsServiceRequest with index_id");
+        } else {
+            tracing::info!(peer.addr = %remote_addr, "Received ExportLogsServiceRequest");
+        }
 
         let total_records = request
             .get_ref()
@@ -371,15 +423,25 @@ impl OtelLogsServiceTrait for OtlpLogsService {
             .flat_map(|sl| &sl.log_records)
             .count();
 
-        INGEST_LOG_COUNTER.inc_by(total_records as u64);
+        // INGEST_LOG_COUNTER.inc_by(total_records as u64);
 
         let req_data = request.into_inner();
-        
-        // If we have an ingestion sender, process logs for storage
-        if let Some(ref ingest_tx) = self.ingest_tx {
-            match crate::otlp_ingest_connector::process_otlp_logs(req_data.clone(), ingest_tx).await {
-                Ok(count) => tracing::info!("Ingested {} log records", count),
-                Err(e) => tracing::error!("Failed to ingest logs: {}", e),
+
+        // If we have a batcher, add logs to batch for storage with index_id
+        if let Some(ref batcher) = self.batcher {
+            match crate::otlp_ingest_connector::process_otlp_logs_batched_with_index(
+                req_data.clone(),
+                batcher,
+                index_id.clone(),
+            ).await {
+                Ok(count) => {
+                    if let Some(ref idx) = index_id {
+                        tracing::info!(index_id = %idx, "Added {} log records to batch with index_id", count);
+                    } else {
+                        tracing::info!("Added {} log records to batch", count);
+                    }
+                },
+                Err(e) => tracing::error!("Failed to add logs to batch: {}", e),
             }
         }
         

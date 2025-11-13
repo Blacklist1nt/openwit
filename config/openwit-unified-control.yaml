@@ -11,7 +11,7 @@ ingestion:
     kafka:
       enabled: true
     grpc:
-      enabled: false
+      enabled: true
     http:
       enabled: false
 
@@ -142,6 +142,12 @@ ingestion:
     max_batch_bytes: 50000000
     flush_interval_secs: 5
     max_messages_per_batch: 1000
+
+# gRPC/HTTP ingestion batching configuration
+processing:
+  buffer:
+    flush_size_messages: 5000
+    flush_interval_seconds: 20
 
 storage:
   backend: "local"

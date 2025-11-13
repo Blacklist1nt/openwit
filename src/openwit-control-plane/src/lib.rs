@@ -24,7 +24,7 @@ pub mod proto {
 /// Start the control plane surveillance node
 pub async fn start_control_plane(
     node_id: String,
-    cluster_handle: openwit_network::ClusterHandle,
+    // cluster_handle parameter removed - gossip/network deprecated
     grpc_addr: SocketAddr,
     config_path: Option<&str>,
 ) -> Result<()> {
@@ -34,15 +34,15 @@ pub async fn start_control_plane(
     info!("gRPC Address: {}", grpc_addr);
     info!("════════════════════════════════════════");
     info!("");
-    
-    // Set control plane metadata in gossip
-    cluster_handle.set_self_kv("node_type", "control").await;
-    cluster_handle.set_self_kv("node_id", &node_id).await;
-    cluster_handle.set_self_kv("grpc_addr", &grpc_addr.to_string()).await;
-    
-    // Create surveillance node
+
+    // Set control plane metadata in gossip (DISABLED - network removed)
+    // cluster_handle.set_self_kv("node_type", "control").await;
+    // cluster_handle.set_self_kv("node_id", &node_id).await;
+    // cluster_handle.set_self_kv("grpc_addr", &grpc_addr.to_string()).await;
+
+    // Create surveillance node (without cluster_handle)
     info!("Creating surveillance node...");
-    let mut surveillance = SurveillanceNode::new(node_id.clone(), cluster_handle.clone()).await?;
+    let mut surveillance = SurveillanceNode::new(node_id.clone()).await?;
     
     // Load configuration if provided
     if let Some(path) = config_path {

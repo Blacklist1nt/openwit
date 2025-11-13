@@ -11,7 +11,11 @@ use opentelemetry_proto::tonic::collector::{
 };
 
 use openwit_config::UnifiedConfig;
+use openwit_ingestion::types::IngestionConfig;
 use crate::otlp_services::{OtlpTraceService, OtlpMetricsService, OtlpLogsService};
+use crate::batcher::{Batcher, BatcherConfig};
+use crate::flush_pool::{FlushWorkerPool, FlushPoolConfig};
+use crate::wal::WalManager;
 
 type TelemetryOutputSender = mpsc::Sender<String>;
 
@@ -60,12 +64,47 @@ impl GrpcServer {
         let mut trace_service = OtlpTraceService::new(output_tx.clone());
         let mut metrics_service = OtlpMetricsService::new(output_tx.clone());
         let mut logs_service = OtlpLogsService::new(output_tx);
-        
-        // Add ingestion support if available
-        if let Some(ref ingest_tx) = self.ingest_tx {
-            trace_service = trace_service.with_ingestion(ingest_tx.clone());
-            metrics_service = metrics_service.with_ingestion(ingest_tx.clone());
-            logs_service = logs_service.with_ingestion(ingest_tx.clone());
+
+        // Create batcher if ingestion is available
+        if let Some(ingest_tx) = self.ingest_tx {
+            // Get ingestion config from unified config
+            let ingestion_config = IngestionConfig::from_unified(&self.config);
+
+            // Create batcher configuration
+            let batcher_config = BatcherConfig::from_ingestion_config(&ingestion_config);
+
+            tracing::info!(
+                "Creating gRPC batcher with batch_size={} and timeout={:?}",
+                batcher_config.max_batch_size,
+                batcher_config.batch_timeout
+            );
+
+            // Create WAL manager for batch persistence
+            let wal_base_path = std::env::var("DATA_DIR")
+                .unwrap_or_else(|_| "./data".to_string());
+
+            let wal_manager = WalManager::new(&wal_base_path)
+                .await
+                .context("Failed to create WAL manager")?;
+
+            let wal_manager = Arc::new(wal_manager);
+
+            // Create flush worker pool configuration
+            let flush_pool_config = FlushPoolConfig::default();
+
+            // Create flush worker pool (5 workers by default) with WAL
+            let flush_pool = FlushWorkerPool::new(flush_pool_config, ingest_tx, wal_manager);
+
+            // Create batcher with flush pool (returns Arc<Batcher>)
+            let batcher = Batcher::new(batcher_config, flush_pool);
+
+            // Start background flush task
+            batcher.clone().start_flush_task();
+
+            // Add batcher to services
+            trace_service = trace_service.with_batcher(batcher.clone());
+            metrics_service = metrics_service.with_batcher(batcher.clone());
+            logs_service = logs_service.with_batcher(batcher);
         }
 
         let otlp_grpc_listen_address: SocketAddr = grpc_bind_addr

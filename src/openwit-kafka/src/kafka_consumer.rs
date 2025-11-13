@@ -16,11 +16,11 @@ use tracing::{info, warn, error, debug, trace};
 
 use crate::types::{KafkaConfig, KafkaMessage, TopicIndexConfig};
 use crate::grpc_client::TelemetryIngestionClient;
-use openwit_metrics::{
-    record_ingestion,
-    INGESTION_MESSAGES_TOTAL,
-    KAFKA_MESSAGES_CONSUMED,
-};
+// use openwit_metrics::{
+//     record_ingestion,
+//     INGESTION_MESSAGES_TOTAL,
+//     KAFKA_MESSAGES_CONSUMED,
+// };
 
 /// Extract client name from topic based on configuration
 fn extract_client_from_topic(topic: &str, config: &Option<TopicIndexConfig>) -> String {
@@ -392,11 +392,11 @@ impl KafkaConsumer {
         let _start_time = Instant::now();
         
         // Update local and global metrics
-        
-        // Update global Kafka metrics
-        KAFKA_MESSAGES_CONSUMED
-            .with_label_values(&[topic, &self.node_id])
-            .inc();
+
+        // // Update global Kafka metrics
+        // KAFKA_MESSAGES_CONSUMED
+        //     .with_label_values(&[topic, &self.node_id])
+        //     .inc();
         
         // Extract headers
         let mut headers = std::collections::HashMap::new();
@@ -506,11 +506,11 @@ impl KafkaConsumer {
         // Send batch to ingestion node via gRPC streaming (no size limits!)
         match self.grpc_client.send_batch(batch_id.clone(), batch.drain(..).collect()).await {
             Ok(_) => {
-                // Record success metrics
-                record_ingestion("kafka", total_bytes, true, start_time);
-                INGESTION_MESSAGES_TOTAL
-                    .with_label_values(&["kafka", "success"])
-                    .inc_by(batch_size as u64);
+                // // Record success metrics
+                // record_ingestion("kafka", total_bytes, true, start_time);
+                // INGESTION_MESSAGES_TOTAL
+                //     .with_label_values(&["kafka", "success"])
+                //     .inc_by(batch_size as u64);
                 
                 // Log batch success only in debug mode
                 let duration = start_time.elapsed();
@@ -528,9 +528,9 @@ impl KafkaConsumer {
                     total_bytes as f64 / 1_048_576.0,
                     e
                 );
-                INGESTION_MESSAGES_TOTAL
-                    .with_label_values(&["kafka", "error"])
-                    .inc_by(batch_size as u64);
+                // INGESTION_MESSAGES_TOTAL
+                //     .with_label_values(&["kafka", "error"])
+                //     .inc_by(batch_size as u64);
                 // Note: Messages are lost here. In production, you might want to implement
                 // a retry queue or dead letter topic
             }

